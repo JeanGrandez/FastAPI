@@ -11,10 +11,11 @@ from contextlib import asynccontextmanager
 # ----------------------------------
 # Configuración de MongoDB
 # ----------------------------------
-MONGO_URI = os.environ.get("MONGO_URI", "mongodb://localhost:27017")
+MONGO_URI = os.environ.get("MONGO_URL", "mongodb://mongo:eeuvqghhIdgLuNrhHXHilEjqhprjYNIi@junction.proxy.rlwy.net:44937")
+client = MongoClient(MONGO_URI)
 DATABASE_NAME = "dolar"
 
-client = MongoClient(MONGO_URI)
+
 db = client[DATABASE_NAME]
 
 casas_collection = db["casas"]         # Datos en vivo de casas de cambio
