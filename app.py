@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 # ----------------------------------
 # Configuración de MongoDB
 # ----------------------------------
-MONGO_URI = os.environ.get("MONGO_URL", "mongodb://mongo:eeuvqghhIdgLuNrhHXHilEjqhprjYNIi@junction.proxy.rlwy.net:44937")
+MONGO_URI = os.environ.get("MONGO_URL", "mongodb://mongo:dnIQeeVIvGgxKUQSalcaOSbysMFvXLKB@monorail.proxy.rlwy.net:36675")
 client = MongoClient(MONGO_URI)
 DATABASE_NAME = "dolar"
 
