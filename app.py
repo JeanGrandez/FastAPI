@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pymongo import MongoClient
 from bs4 import BeautifulSoup
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.background import BackgroundScheduler
 from contextlib import asynccontextmanager
 
@@ -15,15 +15,19 @@ MONGO_URI = os.environ.get("MONGO_URL", "mongodb://mongo:eeuvqghhIdgLuNrhHXHilEj
 client = MongoClient(MONGO_URI)
 DATABASE_NAME = "dolar"
 
-
 db = client[DATABASE_NAME]
 
-casas_collection = db["casas"]         # Datos en vivo de casas de cambio
+casas_collection = db["casas"]           # Datos en vivo de casas de cambio
 historial_collection = db["historial"]   # Historial de cambios
-dolar_peru_collection = db["DolarPeru"]    # Datos SUNAT/Paralelo
+dolar_peru_collection = db["DolarPeru"]  # Datos SUNAT/Paralelo
 
 # ----------------------------------
-# Funciones de scraping (simplificadas)
+# Zona horaria GMT-5
+# ----------------------------------
+gmt_minus_5 = timezone(timedelta(hours=-5))
+
+# ----------------------------------
+# Funciones de scraping 
 # ----------------------------------
 def get_paralelo_data(soup):
     try:
@@ -40,7 +44,7 @@ def get_paralelo_data(soup):
             return None, None
         return float(buy_p.get_text(strip=True)), float(sell_p.get_text(strip=True))
     except Exception as err:
-        print(f"[{datetime.now()}] Error extrayendo Paralelo: {err}")
+        print(f"[{datetime.now(gmt_minus_5)}] Error extrayendo Paralelo: {err}")
         return None, None
 
 def get_sunat_data(soup):
@@ -59,7 +63,7 @@ def get_sunat_data(soup):
             return None, None
         return float(buy_p.get_text(strip=True)), float(sell_p.get_text(strip=True))
     except Exception as err:
-        print(f"[{datetime.now()}] Error extrayendo Sunat: {err}")
+        print(f"[{datetime.now(gmt_minus_5)}] Error extrayendo Sunat: {err}")
         return None, None
 
 def scrape_and_update():
@@ -69,14 +73,14 @@ def scrape_and_update():
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
     except Exception as e:
-        print(f"[{datetime.now()}] Error al obtener la página: {e}")
+        print(f"[{datetime.now(gmt_minus_5)}] Error al obtener la página: {e}")
         return
 
     soup = BeautifulSoup(response.text, "html.parser")
     
     # Procesar cada casa de cambio encontrada
     casas = soup.find_all("div", class_="ExchangeHouseItem_item__FLx1C")
-    print(f"[{datetime.now()}] Se encontraron {len(casas)} casas de cambio.")
+    print(f"[{datetime.now(gmt_minus_5)}] Se encontraron {len(casas)} casas de cambio.")
 
     for casa in casas:
         # Extraer nombre
@@ -98,17 +102,18 @@ def scrape_and_update():
                 sell_value = sell_p.get_text(strip=True)
         
         if buy_value is None or sell_value is None:
-            print(f"[{datetime.now()}] No se pudieron extraer los valores para {name}.")
+            print(f"[{datetime.now(gmt_minus_5)}] No se pudieron extraer los valores para {name}.")
             continue
 
         try:
             new_buy = float(buy_value)
             new_sell = float(sell_value)
         except Exception as e:
-            print(f"[{datetime.now()}] Error al convertir los valores para {name}: {e}")
+            print(f"[{datetime.now(gmt_minus_5)}] Error al convertir los valores para {name}: {e}")
             continue
 
-        current_timestamp = datetime.now()
+        # Tomar la fecha/hora con GMT-5
+        current_timestamp = datetime.now(gmt_minus_5)
         current_date_str = current_timestamp.strftime("%Y-%m-%d")
         
         # Verificar si ya existe registro
@@ -118,7 +123,7 @@ def scrape_and_update():
                 old_buy = float(existing_record.get("buy", 0))
                 old_sell = float(existing_record.get("sell", 0))
             except Exception as e:
-                print(f"[{datetime.now()}] Error al convertir valores antiguos para {name}: {e}")
+                print(f"[{datetime.now(gmt_minus_5)}] Error al convertir valores antiguos para {name}: {e}")
                 old_buy, old_sell = None, None
 
             if new_buy != old_buy or new_sell != old_sell:
@@ -131,7 +136,7 @@ def scrape_and_update():
                     update_fields["date"] = current_date_str
 
                 casas_collection.update_one({"_id": existing_record["_id"]}, {"$set": update_fields})
-                print(f"[{datetime.now()}] Actualizado {name}: compra {old_buy} -> {new_buy}, venta {old_sell} -> {new_sell}")
+                print(f"[{datetime.now(gmt_minus_5)}] Actualizado {name}: compra {old_buy} -> {new_buy}, venta {old_sell} -> {new_sell}")
 
                 log_entry = {
                     "name": name,
@@ -143,7 +148,7 @@ def scrape_and_update():
                 }
                 historial_collection.insert_one(log_entry)
             else:
-                print(f"[{datetime.now()}] No hubo cambio para {name}.")
+                print(f"[{datetime.now(gmt_minus_5)}] No hubo cambio para {name}.")
         else:
             document = {
                 "name": name,
@@ -153,7 +158,7 @@ def scrape_and_update():
                 "last_updated": current_timestamp
             }
             casas_collection.insert_one(document)
-            print(f"[{datetime.now()}] Insertado nuevo registro para {name}.")
+            print(f"[{datetime.now(gmt_minus_5)}] Insertado nuevo registro para {name}.")
 
     # Actualizar opcionalmente los datos de Sunat/Paralelo
     paralelo_buy, paralelo_sell = get_paralelo_data(soup)
@@ -161,14 +166,14 @@ def scrape_and_update():
     if (paralelo_buy is not None and paralelo_sell is not None and
         sunat_buy is not None and sunat_sell is not None):
         dolar_data = {
-            "fecha": datetime.now(),
+            "fecha": datetime.now(gmt_minus_5),
             "sunat": {"compra": sunat_buy, "venta": sunat_sell},
             "paralelo": {"compra": paralelo_buy, "venta": paralelo_sell}
         }
         dolar_peru_collection.update_one({}, {"$set": dolar_data}, upsert=True)
-        print(f"[{datetime.now()}] Sunat/Paralelo actualizados en DolarPeru: {dolar_data}")
+        print(f"[{datetime.now(gmt_minus_5)}] Sunat/Paralelo actualizados en DolarPeru: {dolar_data}")
     else:
-        print(f"[{datetime.now()}] No se pudo obtener correctamente Sunat o Paralelo.")
+        print(f"[{datetime.now(gmt_minus_5)}] No se pudo obtener correctamente Sunat o Paralelo.")
 
 # ----------------------------------
 # Configurar Scheduler para el scraping
