@@ -8,10 +8,10 @@ from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.background import BackgroundScheduler
 from contextlib import asynccontextmanager
 
-# --- IMPORTS ADICIONALES PARA SELENIUM ---
+
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-import time  # para time.sleep (simple) o puedes usar WebDriverWait
+import time 
 
 # ----------------------------------
 # Configuración de MongoDB
@@ -73,9 +73,7 @@ def get_sunat_data(soup):
         return None, None
 
 def scrape_and_update():
-    """
-    Scraping de 'cuantoestaeldolar.pe' con requests + BeautifulSoup (HTML estático).
-    """
+  
     url = "https://cuantoestaeldolar.pe/"
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
@@ -184,34 +182,26 @@ def scrape_and_update():
         print(f"[{datetime.now(gmt_minus_5)}] No se pudo obtener correctamente Sunat o Paralelo.")
 
 
-# ------- NUEVA VERSIÓN: Scraping Mercado Cambiario con Selenium Headless -------
+
 def scrape_mercadocambiario():
-    """
-    Usa Selenium para cargar la página de https://www.mercadocambiario.pe/
-    y obtener los spans que React inyecta dinámicamente.
-    """
+   
     url = "https://www.mercadocambiario.pe/"
     
-    # Configuración de Chrome en modo headless
+    
     options = Options()
     options.add_argument("--headless")
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
 
-    # Si usas webdriver_manager (opcional):
-    # from webdriver_manager.chrome import ChromeDriverManager
-    # driver = webdriver.Chrome(ChromeDriverManager().install(), options=options)
-
-    # Si ya tienes ChromeDriver en PATH:
     driver = webdriver.Chrome(options=options)
     
     try:
         driver.get(url)
         
-        # Esperar unos segundos a que React cargue el contenido
+       
         time.sleep(5)
         
-        # Obtener HTML renderizado
+        
         page_source = driver.page_source
     except Exception as e:
         print(f"[{datetime.now(gmt_minus_5)}] Error con Selenium: {e}")
@@ -220,10 +210,10 @@ def scrape_mercadocambiario():
     
     driver.quit()
 
-    # Ahora sí usamos BeautifulSoup para parsear el HTML final
+    
     soup = BeautifulSoup(page_source, "html.parser")
     
-    # Buscar los spans con la clase "MuiTypography-root MuiTypography-body1 amount css-wrqirr"
+    
     spans = soup.find_all("span", class_="MuiTypography-root MuiTypography-body1 amount css-wrqirr")
 
     if len(spans) < 2:
@@ -264,17 +254,14 @@ from contextlib import asynccontextmanager
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     scheduler = BackgroundScheduler()
-    # Programa cada scraping con el intervalo que desees:
+   
     scheduler.add_job(scrape_and_update, 'interval', minutes=5)
     scheduler.add_job(scrape_mercadocambiario, 'interval', minutes=5)
     scheduler.start()
-    
-    # (Opcional) hacer un primer scraping al iniciar
-    scrape_and_update()
-    scrape_mercadocambiario()
+
     
     yield
-    # Al cerrar la app, detenemos el scheduler
+    
     scheduler.shutdown()
 
 app = FastAPI(lifespan=lifespan, title="Scraping de Casas de Cambio", version="1.0.0")
