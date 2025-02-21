@@ -8,18 +8,24 @@ from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.background import BackgroundScheduler
 from contextlib import asynccontextmanager
 
+# --- IMPORTS ADICIONALES PARA SELENIUM ---
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+import time  # para time.sleep (simple) o puedes usar WebDriverWait
+
 # ----------------------------------
 # Configuración de MongoDB
 # ----------------------------------
-MONGO_URI = os.environ.get("MONGO_URL", "mongodb://mongo:dnIQeeVIvGgxKUQSalcaOSbysMFvXLKB@monorail.proxy.rlwy.net:36675")
+MONGO_URI = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
 client = MongoClient(MONGO_URI)
 DATABASE_NAME = "dolar"
 
 db = client[DATABASE_NAME]
 
-casas_collection = db["casas"]           # Datos en vivo de casas de cambio
-historial_collection = db["historial"]   # Historial de cambios
-dolar_peru_collection = db["DolarPeru"]  # Datos SUNAT/Paralelo
+casas_collection = db["casas"]          
+historial_collection = db["historial"]  
+dolar_peru_collection = db["DolarPeru"]
+mercado_cambio = db["mercadocambiario"]
 
 # ----------------------------------
 # Zona horaria GMT-5
@@ -67,10 +73,13 @@ def get_sunat_data(soup):
         return None, None
 
 def scrape_and_update():
+    """
+    Scraping de 'cuantoestaeldolar.pe' con requests + BeautifulSoup (HTML estático).
+    """
     url = "https://cuantoestaeldolar.pe/"
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        response = requests.get(url, headers=headers, timeout=20)
         response.raise_for_status()
     except Exception as e:
         print(f"[{datetime.now(gmt_minus_5)}] Error al obtener la página: {e}")
@@ -112,7 +121,6 @@ def scrape_and_update():
             print(f"[{datetime.now(gmt_minus_5)}] Error al convertir los valores para {name}: {e}")
             continue
 
-        # Tomar la fecha/hora con GMT-5
         current_timestamp = datetime.now(gmt_minus_5)
         current_date_str = current_timestamp.strftime("%Y-%m-%d")
         
@@ -175,27 +183,100 @@ def scrape_and_update():
     else:
         print(f"[{datetime.now(gmt_minus_5)}] No se pudo obtener correctamente Sunat o Paralelo.")
 
+
+# ------- NUEVA VERSIÓN: Scraping Mercado Cambiario con Selenium Headless -------
+def scrape_mercadocambiario():
+    """
+    Usa Selenium para cargar la página de https://www.mercadocambiario.pe/
+    y obtener los spans que React inyecta dinámicamente.
+    """
+    url = "https://www.mercadocambiario.pe/"
+    
+    # Configuración de Chrome en modo headless
+    options = Options()
+    options.add_argument("--headless")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--no-sandbox")
+
+    # Si usas webdriver_manager (opcional):
+    # from webdriver_manager.chrome import ChromeDriverManager
+    # driver = webdriver.Chrome(ChromeDriverManager().install(), options=options)
+
+    # Si ya tienes ChromeDriver en PATH:
+    driver = webdriver.Chrome(options=options)
+    
+    try:
+        driver.get(url)
+        
+        # Esperar unos segundos a que React cargue el contenido
+        time.sleep(5)
+        
+        # Obtener HTML renderizado
+        page_source = driver.page_source
+    except Exception as e:
+        print(f"[{datetime.now(gmt_minus_5)}] Error con Selenium: {e}")
+        driver.quit()
+        return
+    
+    driver.quit()
+
+    # Ahora sí usamos BeautifulSoup para parsear el HTML final
+    soup = BeautifulSoup(page_source, "html.parser")
+    
+    # Buscar los spans con la clase "MuiTypography-root MuiTypography-body1 amount css-wrqirr"
+    spans = soup.find_all("span", class_="MuiTypography-root MuiTypography-body1 amount css-wrqirr")
+
+    if len(spans) < 2:
+        print(f"[{datetime.now(gmt_minus_5)}] No se encontraron los valores de compra y venta en MercadoCambiario.pe.")
+        return
+    
+    try:
+        demanda = float(spans[0].get_text(strip=True).replace(',', '.'))
+        oferta  = float(spans[1].get_text(strip=True).replace(',', '.'))
+    except Exception as e:
+        print(f"[{datetime.now(gmt_minus_5)}] Error al convertir los valores de compra/venta: {e}")
+        return
+
+    current_timestamp = datetime.now(gmt_minus_5)
+    document = {
+        "name": "Mercado Cambiario",
+        "demanda": demanda,
+        "oferta": oferta,
+        "last_updated": current_timestamp
+    }
+
+    # Insertar o actualizar en MongoDB
+    existing_record = mercado_cambio.find_one({"name": "Mercado Cambiario"})
+    if existing_record:
+        mercado_cambio.update_one({"_id": existing_record["_id"]}, {"$set": document})
+        print(f"[{datetime.now(gmt_minus_5)}] Actualizado Mercado Cambiario: Compra {demanda}, Venta {oferta}")
+    else:
+        mercado_cambio.insert_one(document)
+        print(f"[{datetime.now(gmt_minus_5)}] Insertado nuevo registro Mercado Cambiario: Compra {demanda}, Venta {oferta}")
+
+
 # ----------------------------------
 # Configurar Scheduler para el scraping
 # ----------------------------------
 
-# ----------------------------------
-# Definir lifespan event handler
-# ----------------------------------
+from contextlib import asynccontextmanager
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-
     scheduler = BackgroundScheduler()
+    # Programa cada scraping con el intervalo que desees:
     scheduler.add_job(scrape_and_update, 'interval', minutes=5)
+    scheduler.add_job(scrape_mercadocambiario, 'interval', minutes=5)
     scheduler.start()
     
-    # Código de startup: se puede ejecutar un scraping inicial
+    # (Opcional) hacer un primer scraping al iniciar
     scrape_and_update()
+    scrape_mercadocambiario()
+    
     yield
-    # Código de shutdown: cerrar el scheduler
+    # Al cerrar la app, detenemos el scheduler
     scheduler.shutdown()
 
-# Crear la aplicación usando el lifespan handler
 app = FastAPI(lifespan=lifespan, title="Scraping de Casas de Cambio", version="1.0.0")
 
 app.add_middleware(
@@ -207,7 +288,7 @@ app.add_middleware(
 )
 
 # ----------------------------------
-# Endpoint para exponer la información de "casas"
+# Rutas / Endpoints
 # ----------------------------------
 @app.get("/casas", summary="Obtiene información en vivo de las casas de cambio")
 def get_casas():
@@ -230,5 +311,13 @@ def get_dolarperu():
     try:
         data = dolar_peru_collection.find_one({}, {"_id": 0})
         return {"dolar_peru": data}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/mercadocambio", summary="Obtiene los datos del mercado cambiario")
+def get_mercadocambio():    
+    try:
+        datos = list(mercado_cambio.find({}, {"_id": 0}))
+        return {"mercado_cambio": datos}
     except Exception as e:
         return {"error": str(e)}
