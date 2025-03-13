@@ -7,6 +7,14 @@ import requests
 from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.background import BackgroundScheduler
 from contextlib import asynccontextmanager
+from fastapi.responses import PlainTextResponse
+
+# ----------------------------------
+# HTML Copy & Paste to Excel 
+# ----------------------------------
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+
 
 
 from selenium import webdriver
@@ -256,7 +264,7 @@ async def lifespan(app: FastAPI):
     scheduler = BackgroundScheduler()
    
     scheduler.add_job(scrape_and_update, 'interval', minutes=5)
-    scheduler.add_job(scrape_mercadocambiario, 'interval', minutes=5)
+    scheduler.add_job(scrape_mercadocambiario, 'interval', minutes=20)
     scheduler.start()
 
     
@@ -308,3 +316,14 @@ def get_mercadocambio():
         return {"mercado_cambio": datos}
     except Exception as e:
         return {"error": str(e)}
+
+
+# Create a 'static' directory if it doesn't exist
+os.makedirs("static", exist_ok=True)
+
+# Mount the static directory
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+@app.get("/", response_class=FileResponse)
+async def get_interface():
+    return FileResponse("exchange_rates.html")

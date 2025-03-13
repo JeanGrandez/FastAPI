@@ -5,3 +5,4 @@ beautifulsoup4
 pymongo
 apscheduler
 python-dotenv
+selenium
